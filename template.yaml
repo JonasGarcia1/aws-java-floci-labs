@@ -1,0 +1,53 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Repaso AWS Java order processing lab (optional AWS deployment)
+Resources:
+  OrdersQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${AWS::StackName}-orders'
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt OrdersDlq.Arn
+        maxReceiveCount: 3
+  OrdersDlq:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${AWS::StackName}-orders-dlq'
+  OrdersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${AWS::StackName}-orders'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: orderId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: orderId
+          KeyType: HASH
+  OrderConsumer:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: target/aws-java-floci-labs-1.0.0-lambda.jar
+      Handler: com.jonas.repaso.aws.OrderConsumerHandler::handleRequest
+      Runtime: java21
+      MemorySize: 512
+      Timeout: 15
+      Environment:
+        Variables:
+          ORDERS_TABLE: !Ref OrdersTable
+      Policies:
+        - DynamoDBWritePolicy:
+            TableName: !Ref OrdersTable
+      Events:
+        Orders:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt OrdersQueue.Arn
+            BatchSize: 5
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+Outputs:
+  OrdersQueueUrl:
+    Value: !Ref OrdersQueue
+  OrdersTableName:
+    Value: !Ref OrdersTable

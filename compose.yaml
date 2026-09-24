@@ -1,0 +1,13 @@
+services:
+  floci:
+    image: floci/floci:2.1.0
+    container_name: repaso-aws-floci
+    ports:
+      - "127.0.0.1:4566:4566"
+    environment:
+      FLOCI_HOSTNAME: floci
+    healthcheck:
+      test: ["CMD", "bash", "-c", "</dev/tcp/127.0.0.1/4566"]
+      interval: 5s
+      timeout: 2s
+      retries: 20
