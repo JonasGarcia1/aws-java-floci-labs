@@ -74,6 +74,7 @@ class FlociOrdersE2EIntegrationTest {
         String dlqUrl = null;
         ConfigurableApplicationContext api = null;
 
+        System.out.println("E2E 1/5: creando bucket, colas y tabla DynamoDB");
         try (var s3 = s3Client(); var sqs = sqsClient(); var dynamo = dynamoClient(); var lambda = lambdaClient()) {
             try {
                 s3.createBucket(request -> request.bucket(bucket));
@@ -94,6 +95,9 @@ class FlociOrdersE2EIntegrationTest {
                     .billingMode(BillingMode.PAY_PER_REQUEST));
 
             byte[] lambdaJar = Files.readAllBytes(Path.of("target/aws-java-floci-labs-1.0.0-lambda.jar"));
+            assertTrue(lambdaJar.length < 74_000_000,
+                    "El paquete Lambda debe quedar debajo del limite de 100 MB que Floci acepta para la solicitud codificada en Base64");
+            System.out.println("E2E 2/5: creando Lambda y conectando la cola SQS");
             lambda.createFunction(CreateFunctionRequest.builder().functionName(function).runtime(Runtime.JAVA21)
                     .role(ROLE).handler("com.jonas.repaso.aws.OrderConsumerHandler::handleRequest")
                     .code(FunctionCode.builder().zipFile(SdkBytes.fromByteArray(lambdaJar)).build())
@@ -104,6 +108,7 @@ class FlociOrdersE2EIntegrationTest {
                     .functionName(function).eventSourceArn(queueArn).batchSize(5)
                     .functionResponseTypes(FunctionResponseType.REPORT_BATCH_ITEM_FAILURES).build()).uuid();
 
+            System.out.println("E2E 3/5: iniciando API y enviando el pedido duplicado");
             api = new SpringApplicationBuilder(OrdersApplication.class).run("--spring.main.banner-mode=off",
                     "--server.port=0", "--aws.region=us-east-1", "--aws.endpoint=" + ENDPOINT,
                     "--aws.orders-bucket=" + bucket, "--aws.orders-queue-url=" + queueUrl,
@@ -135,10 +140,12 @@ class FlociOrdersE2EIntegrationTest {
                         && "0".equals(counts.get(QueueAttributeName.APPROXIMATE_NUMBER_OF_MESSAGES_NOT_VISIBLE));
             });
 
+            System.out.println("E2E 4/5: enviando mensaje invalido y esperando los reintentos hacia la DLQ");
             sqs.sendMessage(SendMessageRequest.builder().queueUrl(queueUrl).messageBody("not-json").build());
             String deadLetterQueueUrl = dlqUrl;
             await("invalid message moved to DLQ", Duration.ofSeconds(180), () -> !sqs.receiveMessage(ReceiveMessageRequest.builder()
                     .queueUrl(deadLetterQueueUrl).maxNumberOfMessages(1).waitTimeSeconds(1).build()).messages().isEmpty());
+            System.out.println("E2E 5/5: mensaje invalido confirmado en la DLQ; finalizando limpieza");
         } finally {
             if (api != null) api.close();
             try (var lambda = lambdaClient(); var sqs = sqsClient(); var dynamo = dynamoClient(); var s3 = s3Client()) {
